@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>magnno game board</title>
+  <link rel="stylesheet" href="table.css">
+</head>
+<body>
+  <main id="component" aria-label="Backgammon board" hidden>
+    <div class="frame">
+      <div id="board">
+        <div class="row" id="top-row"></div>
+        <button type="button" class="bar" id="bar" data-slot="0">
+          <span class="bar-label">Bar</span><span class="pieces"></span>
+        </button>
+        <div class="row" id="bottom-row"></div>
+      </div>
+      <div class="trays">
+        <button type="button" class="tray" id="brown-off" data-slot="1">
+          <span class="tray-name">Brown off</span><span class="tray-count">0</span>
+        </button>
+        <button type="button" class="tray" id="white-off" data-slot="26">
+          <span class="tray-name">White off</span><span class="tray-count">0</span>
+        </button>
+      </div>
+    </div>
+    <div id="interaction" hidden>
+      <p id="status" role="status"></p>
+      <div id="choices" role="group" aria-label="Choose a die"></div>
+    </div>
+  </main>
+  <script src="table.js"></script>
+</body>
+</html>
