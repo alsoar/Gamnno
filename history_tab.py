@@ -4,7 +4,6 @@ from typing import NamedTuple
 
 
 COLORS = ("White", "Brown")
-ROLES = {"human": "Human", "baseline": "Baseline bot"}
 TYPES = {"human-bot": "Human vs bot", "bot-bot": "Bot vs bot", "human-human": "Human vs human"}
 
 
@@ -32,7 +31,8 @@ def replay_frames(record):
 def _game_label(summary):
     date = summary["completed_at"]
     when = date[:16].replace("T", " ") + " UTC · " if date else ""
-    return (f"{when}{TYPES[summary['game_type']]} · Seed {summary['seed']} · "
+    players = summary["players"]
+    return (f"{when}{players['white'].title()} vs {players['brown'].title()} · Seed {summary['seed']} · "
             f"{COLORS[summary['winner']]} won · {summary['turn_count']} turns")
 
 
@@ -73,7 +73,9 @@ def render_history(store):
     roles = summary["players"]
 
     st.markdown(f"**{COLORS[summary['winner']]} won** in {summary['turn_count']} player turns. "
-                f"White played as **{ROLES[roles['white']]}** and Brown as **{ROLES[roles['brown']]}**.")
+                f"White played as **{roles['white'].title()}** and Brown as **{roles['brown'].title()}**.")
+    if "agent_framework" not in record and "baseline" in roles.values():
+        st.caption("Recorded with the original baseline policy.")
     dice = " + ".join(str(die) for die in turn["roll"])
     st.caption(f"Turn {frame.turn + 1} of {summary['turn_count']} · {player} · Roll {dice}")
     render_board(frame.board, frame.move)
@@ -84,6 +86,8 @@ def render_history(store):
     else:
         description = move_description(frame.move, turn["player"], frame.before)
     st.write(description)
+    if position and frame.used == len(turn["moves"]) and turn.get("explanation"):
+        st.caption(turn["explanation"])
 
     def step(delta):
         st.session_state["history_seek"] = max(0, min(last, st.session_state["history_seek"] + delta))

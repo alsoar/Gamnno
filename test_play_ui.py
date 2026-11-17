@@ -1,6 +1,7 @@
 """Exercise the native controls in a real Streamlit session."""
 
 import unittest
+from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
@@ -36,14 +37,16 @@ def click_move(app, move):
 def advance_to_last_turn(human):
     # This recorded game reaches a White bear-off on turn 13.
     match = Match.new(human_color=human, seed=2095)
-    for _ in range(12):
-        if match.state.player == human:
-            turn = heuristic.choose_turn(match.state, match.dice)
-            for move in turn.moves:
-                match.choose(move)
-            match.finish_human_turn()
-        else:
-            match.play_bot_turn()
+    # The UI fixture starts at the last turn of the archived original-baseline game.
+    with patch.object(match.agent, "choose_turn", side_effect=heuristic.choose_turn):
+        for _ in range(12):
+            if match.state.player == human:
+                turn = heuristic.choose_turn(match.state, match.dice)
+                for move in turn.moves:
+                    match.choose(move)
+                match.finish_human_turn()
+            else:
+                match.play_bot_turn()
     return match
 
 
@@ -107,11 +110,13 @@ class PlayTabTests(unittest.TestCase):
         self.assertEqual(app.session_state["history_game"], match.id)
         self.assertTrue(any("saved to History" in m.value for m in app.success))
         app.radio(key="play_new_color").set_value("Brown").run()
+        app.selectbox(key="play_opponent").select("hoarder").run()
         app.button(key="play_new").click().run()
         self.assert_healthy(app)
         new = app.session_state["play_match"]
         self.assertNotEqual(new.id, match.id)
         self.assertEqual(new.human_color, game.BROWN)
+        self.assertEqual(new.agent.name, "hoarder")
         self.assertEqual(new.state.player, game.BROWN)
         self.assertEqual(len(app.session_state["test_records"]), 1)
 
@@ -119,7 +124,7 @@ class PlayTabTests(unittest.TestCase):
         match = advance_to_last_turn(game.BROWN)
         app = open_match(match)
         self.assert_healthy(app)
-        self.assertTrue(any("baseline won" in m.value for m in app.success))
+        self.assertTrue(any("Baseline won" in m.value for m in app.success))
         app.button(key="play_save").click().run()
         record = app.session_state["test_records"][match.id]
         self.assertEqual(record["winner"], 0)

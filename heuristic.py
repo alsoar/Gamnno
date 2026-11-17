@@ -110,12 +110,15 @@ def priority_key(m: Metrics) -> tuple:
     return -level, terms, -m.own_checkers_hit
 
 
-def _legal_paths(state, dice, prefix=()):
+def _legal_paths(state, dice, prefix=(), *, observe_step=None, prefer_win=False):
     """Yield every legal ordered path, its final state and the steps that hit.
 
     legal_turns handles the full-roll obligations. Its representatives can hide
     differences in where a capture occurred or which checker used a die.
     Expand alternate paths with the engine's own step and transition helpers.
+    An optional observer receives (packed pre-step board, move, zero-based
+    step index). Its annotations replace the default list of moves that hit.
+    With prefer_win, a reachable win yields only the first canonical winning path.
     """
     dice = tuple(dice)
     canonical = game.legal_turns(state, dice)
@@ -124,6 +127,7 @@ def _legal_paths(state, dice, prefix=()):
     ends = {game.state_key(t.state): (t.state, game._rank(t.moves)) for t in canonical}
     player = int(state.player)
     pips = game._pips(dice)
+    roll_size = len(pips)
     if prefix:
         initial, pips, _ = game._replay(state, pips, prefix)
     else:
@@ -136,7 +140,11 @@ def _legal_paths(state, dice, prefix=()):
         children = []
         for move, rest in game._steps(board, player, remaining):
             undo = game._push(board, move)
-            children.append((move, rest, bytes(board), undo[2] == -move.checker))
+            if observe_step is None:
+                annotation = move if undo[2] == -move.checker else None
+            else:
+                annotation = observe_step(position, move, roll_size - len(remaining))
+            children.append((move, rest, bytes(board), annotation))
             game._pop(board, move, undo)
 
         def tie_order(child):
@@ -152,17 +160,51 @@ def _legal_paths(state, dice, prefix=()):
         if remaining and not won:
             children = branches(position, remaining)
             if children:
-                for move, rest, child, hit in children:
-                    yield from visit(child, rest, moves + (move,), hits + (move,) if hit else hits)
+                for move, rest, child, annotation in children:
+                    annotations = hits if annotation is None else hits + (annotation,)
+                    yield from visit(child, rest, moves + (move,), annotations)
                 return
         end = ends.get(position)
         if end is not None and (won or game._rank(moves) == end[1]):
             yield Turn(moves, end[0]), hits
 
+    @lru_cache(maxsize=None)
+    def winning_suffix(position, remaining):
+        for move, rest, child, annotation in branches(position, remaining):
+            if move.target == OFF:
+                return ((move, annotation),), child
+            continuation = winning_suffix(child, rest)
+            if continuation is not None:
+                steps, final = continuation
+                return ((move, annotation),) + steps, final
+        return None
+
     try:
-        yield from visit(bytes(initial), pips, prefix, _hit_steps(state, prefix) if prefix else ())
+        annotations = ()
+        if prefix and observe_step is None:
+            annotations = _hit_steps(state, prefix)
+        elif prefix:
+            board = game._scratch(state)
+            for i, move in enumerate(prefix):
+                annotation = observe_step(bytes(board), move, i)
+                if annotation is not None:
+                    annotations += (annotation,)
+                game._push(board, move)
+        initial_key = bytes(initial)
+        if prefer_win and not (prefix and prefix[-1].target == OFF):
+            if any(t.moves and t.moves[-1].target == OFF for t in canonical):
+                win = winning_suffix(initial_key, pips)
+                if win is not None:
+                    steps, final = win
+                    moves = prefix + tuple(move for move, _ in steps)
+                    annotations += tuple(note for _, note in steps if note is not None)
+                    yield Turn(moves, ends[final][0]), annotations
+                    return
+        yield from visit(initial_key, pips, prefix, annotations)
     finally:
         branches.cache_clear()
+        winning_suffix.cache_clear()
+        del winning_suffix
         del visit
 
 

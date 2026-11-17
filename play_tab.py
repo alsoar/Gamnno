@@ -1,10 +1,11 @@
-"""Human play against the deterministic baseline, with one match per browser session."""
+"""Human play against a selected agent, with one match per browser session."""
 
 import sqlite3
 import streamlit as st
 
 import backgammon as game
 import board_view
+from agents import AGENT_NAMES
 from match import Match
 from visualizer import _browser_color
 
@@ -23,7 +24,7 @@ def _point(point):
 
 def _new_game():
     side = game.WHITE if st.session_state.play_new_color == "White" else game.BROWN
-    st.session_state.play_match = Match.new(human_color=side)
+    st.session_state.play_match = Match.new(human_color=side, opponent=st.session_state.play_opponent)
     for key in ("play_source", "play_saved", "play_save_error"):
         st.session_state.pop(key, None)
 
@@ -96,7 +97,7 @@ def _human_controls(match):
                 on_click=match.choose, args=(move,), width="stretch",
             )
     elif not match.prefix:
-        st.info("Neither die can be played. Pass to the baseline.")
+        st.info(f"Neither die can be played. Pass to {match.agent.name.title()}.")
 
     if match.prefix:
         steps = [f"{_name(m.checker)} {_point(m.source)} → {_point(m.target)} ({m.die})"
@@ -113,16 +114,18 @@ def _human_controls(match):
 
 def _last_bot_turn(match):
     bot = _browser_color(-match.human_color)
-    # After a human wins, their winning turn follows the baseline's latest turn.
+    # After a human wins, their winning turn follows the bot's latest turn.
     index = next((i for i in range(len(match.turns) - 1, -1, -1)
                   if match.turns[i]["player"] == bot), None)
     if index is None:
         return
     turn = match.turns[index]
     dice = " · ".join(map(str, turn["roll"]))
-    with st.expander(f"Baseline’s last turn · {_name(-match.human_color)} rolled {dice}", expanded=True):
+    name = match.agent.name.title()
+    with st.expander(f"{name}’s last turn · {_name(-match.human_color)} rolled {dice}", expanded=True):
+        if turn.get("explanation"):
+            st.write(turn["explanation"])
         if not turn["moves"]:
-            st.write("The baseline passed.")
             return
         before = next((match.turns[i]["boards"][-1] for i in range(index - 1, -1, -1)
                        if match.turns[i]["boards"]), None)
@@ -143,9 +146,10 @@ def render_play(store):
 
     with st.expander("New game"):
         st.radio("Your color in the new game", ["White", "Brown"], horizontal=True, key="play_new_color")
+        st.selectbox("Opponent", AGENT_NAMES, format_func=str.title, key="play_opponent")
         st.button("Start new game", key="play_new", on_click=_new_game)
 
-    st.caption(f"You play {_name(match.human_color)} · Baseline plays {_name(-match.human_color)}")
+    st.caption(f"You play {_name(match.human_color)} · {match.agent.name.title()} plays {_name(-match.human_color)}")
     table, controls = st.columns([2, 1], gap="medium")
     with table:
         if match.winner is None:
@@ -158,7 +162,7 @@ def render_play(store):
         if match.winner is None:
             _human_controls(match)
         else:
-            who = "You won" if match.winner == match.human_color else "The baseline won"
+            who = "You won" if match.winner == match.human_color else f"{match.agent.name.title()} won"
             st.success(f"{who}. {_name(match.winner)} bore off a checker on turn {len(match.turns)}.")
             if st.session_state.get("play_saved") == match.id:
                 st.success("Game saved to History.")

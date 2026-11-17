@@ -63,6 +63,15 @@ class HistoryTests(unittest.TestCase):
             self.assertCountEqual(pool.map(self.store.save, [row] * 4), [True, False, False, False])
         self.assertEqual(sum(s["id"] == row["id"] for s in self.store.list_games()), 1)
 
+    def test_named_opponents_persist_for_both_matchup_types(self):
+        for roles, expected in (({"white": "hoarder", "brown": "human"}, "human-bot"),
+                                ({"white": "optimizer", "brown": "saboteur"}, "bot-bot")):
+            record = self.human_game()
+            record["players"] = roles
+            self.assertTrue(self.store.save(record))
+            summary = next(s for s in self.store.list_games() if s["id"] == record["id"])
+            self.assertEqual((summary["players"], summary["game_type"]), (roles, expected))
+
     def test_only_completed_consistent_recordings_can_be_added(self):
         game = self.human_game()
         unfinished = deepcopy(game)

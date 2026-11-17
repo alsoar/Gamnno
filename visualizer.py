@@ -8,6 +8,7 @@ import webbrowser
 
 import backgammon as game
 import heuristic
+from agents import AGENT_NAMES, create_agent
 
 
 ASSETS = {
@@ -15,7 +16,7 @@ ASSETS = {
     "/board.js": (Path(__file__).with_name("board.js"), "text/javascript; charset=utf-8"),
     "/replay-2095.json": (Path(__file__).with_name("replay-2095.json"), "application/json; charset=utf-8"),
 }
-API_PATHS = ("/api/new", "/api/turn", "/api/roll", "/api/choices", "/api/heuristic")
+API_PATHS = ("/api/new", "/api/turn", "/api/roll", "/api/choices", "/api/heuristic", "/api/agent")
 
 
 def _native_color(value):
@@ -70,15 +71,23 @@ def game_response(path, payload):
         state = game.from_legacy(payload["board"], _native_color(payload["player"]))
         if path == "/api/roll":
             dice = game.roll_dice()
-        elif path in ("/api/turn", "/api/choices", "/api/heuristic"):
+        elif path in ("/api/turn", "/api/choices", "/api/heuristic", "/api/agent"):
             dice = payload.get("dice")
             if not isinstance(dice, list):
                 raise ValueError("expected a dice array")
-            if path in ("/api/choices", "/api/heuristic"):
+            if path in ("/api/choices", "/api/heuristic", "/api/agent"):
                 prefix = payload.get("prefix", [])
                 if not isinstance(prefix, list):
                     raise ValueError("expected a list of moves for prefix")
                 moves = tuple(_native_move(m) for m in prefix)
+                if path == "/api/agent":
+                    name = payload.get("agent")
+                    if name not in AGENT_NAMES:
+                        raise ValueError("unknown agent")
+                    agent = create_agent(name)
+                    turn = agent.choose_turn(state, dice, prefix=moves)
+                    return {"moves": [_browser_move(m) for m in turn.moves],
+                            "board": game.to_legacy(turn.state), "explanation": agent.explain(state, turn)}
                 if path == "/api/heuristic":
                     turn = heuristic.choose_turn(state, dice, prefix=moves)
                     return {"moves": [_browser_move(m) for m in turn.moves],
@@ -91,6 +100,7 @@ def game_response(path, payload):
     turns = game.legal_turns(state, dice)
     winning_color = game.winner(state)
     return {
+        **({"agents": list(AGENT_NAMES)} if path == "/api/new" else {}),
         "board": game.to_legacy(state),
         "player": _browser_color(state.player),
         "dice": dice,

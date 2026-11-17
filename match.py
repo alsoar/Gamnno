@@ -1,4 +1,4 @@
-"""Human versus baseline match controller using the native rules engine."""
+"""Human versus registered agent match controller using the native rules engine."""
 
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -7,7 +7,7 @@ from secrets import randbits
 from uuid import uuid4
 
 import backgammon as game
-import heuristic
+from agents import create_agent
 from visualizer import _browser_color, _browser_move
 
 
@@ -19,15 +19,16 @@ class Match:
     """One game, including the editable human turn and the completed turn history."""
 
     @classmethod
-    def new(cls, human_color=game.WHITE, seed=None):
-        return cls(human_color, seed)
+    def new(cls, human_color=game.WHITE, seed=None, opponent="baseline"):
+        return cls(human_color, seed, opponent)
 
-    def __init__(self, human_color=game.WHITE, seed=None):
+    def __init__(self, human_color=game.WHITE, seed=None, opponent="baseline"):
         self.human_color = game._integer(human_color, "human_color")
         if self.human_color not in (game.WHITE, game.BROWN):
             raise ValueError("human_color must be WHITE or BROWN")
         self.seed = randbits(32) if seed is None else game._integer(seed, "seed")
         self._rng = Random(self.seed)
+        self.agent = create_agent(opponent, seed=f"opponent/{self.seed}/{opponent}")
         player, self.dice = game.opening_roll(self._rng)
         self.state = game.starting_state(player)
         self._opening = _board_frame(self.state)
@@ -84,12 +85,14 @@ class Match:
 
     def play_bot_turn(self):
         self._require_actor(False)
-        turn = heuristic.choose_turn(self.state, self.dice)
+        turn = self.agent.choose_turn(self.state, self.dice)
+        explanation = self.agent.explain(self.state, turn)
         frames = []
         for i in range(1, len(turn.moves) + 1):
             preview, _, _ = game.turn_options(self.state, self.dice, turn.moves[:i])
             frames.append(_board_frame(preview))
         self._commit(turn.moves, turn.state, frames)
+        self.turns[-1]["explanation"] = explanation
 
     def _commit(self, moves, end, frames):
         record = {
@@ -113,12 +116,12 @@ class Match:
         if self.winner is None:
             raise ValueError("only completed games have a recording")
         players = {
-            "white": "human" if self.human_color == game.WHITE else "baseline",
-            "brown": "human" if self.human_color == game.BROWN else "baseline",
+            "white": "human" if self.human_color == game.WHITE else self.agent.name,
+            "brown": "human" if self.human_color == game.BROWN else self.agent.name,
         }
         return {
             "id": self.id, "completed_at": self._completed_at,
-            "players": players, "seed": self.seed,
+            "players": players, "seed": self.seed, "agent_framework": 1,
             "opening": deepcopy(self._opening), "turns": deepcopy(self.turns),
             "winner": _browser_color(self.winner),
         }

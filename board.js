@@ -21,15 +21,21 @@
   }
 
   function controller() {
-    return controls.mode.value.split("-")[player];
+    return (player === 0 ? controls.mode : byId("brown-actor")).value;
   }
 
   function isBot() {
     return controller() !== "human";
   }
 
-  function sameMove(a, b) {
-    return a.checker === b.checker && a.source === b.source && a.target === b.target && a.die === b.die;
+  function setUpActors(names) {
+    if (controls.mode.options.length > 1) return;
+    for (const select of [controls.mode, byId("brown-actor")]) {
+      for (const name of names) {
+        select.add(new Option(name[0].toUpperCase() + name.slice(1), name));
+      }
+    }
+    byId("brown-actor").value = "baseline";
   }
 
   function clearSelection() {
@@ -170,7 +176,7 @@
     if (done) return "All playable dice used. Finish the turn.";
     if (isBot()) {
       if (paused) return "Paused. Step to see the next move.";
-      return controller() === "heuristic" ? "Playing the heuristic’s chosen turn." : "Playing a random legal turn.";
+      return "Playing the turn selected by " + controller() + ".";
     }
     if (alternatives.length) return "Choose which die to use.";
     if (source !== null) return "Choose a highlighted destination.";
@@ -186,7 +192,8 @@
     byId("history").textContent = history;
     const message = status();
     if (byId("status").textContent !== message) byId("status").textContent = message;
-    const human = !isBot(), active = phase === "active", watching = controls.mode.value !== "human-human";
+    const human = !isBot(), active = phase === "active";
+    const watching = controls.mode.value !== "human" || byId("brown-actor").value !== "human";
     controls.pause.hidden = !watching;
     controls.pause.disabled = phase === "loading" || phase === "over";
     controls.pause.textContent = paused ? "Resume" : "Pause";
@@ -287,6 +294,7 @@
       const start = await post(opening ? "new" : "roll", payload);
       const choice = await inspect(start, []);
       return () => {
+        if (opening) setUpActors(start.agents);
         phase = "active";
         original = start;
         player = start.player;
@@ -309,7 +317,7 @@
       prefix = path;
       botPath = plan;
       notes.push(note);
-      history = note;
+      history = plan && path.length === plan.moves.length ? note + ". " + plan.explanation : note;
       lastMove = move;
       showChoices(result);
     };
@@ -349,10 +357,6 @@
     scheduleBot();
   }
 
-  function randomChoice(items) {
-    return items[Math.floor(Math.random() * items.length)];
-  }
-
   function botStep() {
     if (pending || !isBot()) return;
     if (phase === "ready") return begin(false);
@@ -360,18 +364,13 @@
     if (done) return finishTurn();
     return transact(async current => {
       let plan = botPath;
-      if (!plan && controller() === "heuristic") {
-        const selected = await post("heuristic", {
-          board: original.board, player: original.player, dice: original.dice, prefix,
+      if (!plan) {
+        plan = await post("agent", {
+          board: original.board, player: original.player, dice: original.dice, prefix, agent: controller(),
         });
         if (!current()) return;
-        plan = selected.moves;
-      } else if (!plan) {
-        // Random play samples distinct end boards uniformly from a fresh turn.
-        const matching = original.turns.filter(t => prefix.every((m, i) => t.moves[i] && sameMove(m, t.moves[i])));
-        if (matching.length) plan = randomChoice(matching).moves;
       }
-      return prepareMove(plan ? plan[prefix.length] : randomChoice(options), plan);
+      return prepareMove(plan.moves[prefix.length], plan);
     }, true);
   }
 
@@ -514,7 +513,7 @@
     paint();
     scheduleBot();
   });
-  controls.mode.addEventListener("change", () => {
+  function changeActor() {
     clearTimeout(timer);
     cancelBotRequest();
     clearSelection();
@@ -522,6 +521,8 @@
     paused = false;
     paint();
     scheduleBot();
-  });
+  }
+  controls.mode.addEventListener("change", changeActor);
+  byId("brown-actor").addEventListener("change", changeActor);
   begin(true);
 })();

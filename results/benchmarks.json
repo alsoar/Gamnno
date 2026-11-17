@@ -1,0 +1,97 @@
+{
+  "python": "3.9.6",
+  "platform": "macOS-26.2-arm64-arm-64bit",
+  "seed": 2026,
+  "simulation": {
+    "starts": 90,
+    "finished": 62,
+    "unfinished": 28,
+    "seconds": 1246.1825582499998,
+    "turns": 67724,
+    "starts_per_second": 0.07222055821932381,
+    "finishes_per_second": 0.04975194010664529,
+    "decisions_per_second": 54.34516760939429,
+    "mean_observed_turns": 752.4888888888889,
+    "mean_finished_turns": 189.09677419354838,
+    "wall_seconds_per_start": 13.846472869444442,
+    "peak_rss_before_mib": 29.203125,
+    "peak_rss_after_mib": 31.15625,
+    "cap": 2000
+  },
+  "decisions": {
+    "positions_and_rolls": 64,
+    "mean_unique": 231.34375,
+    "mean_ordered": 2038.5,
+    "mean_legal_generation_ms": 3.6233,
+    "mean_complete_path_generation_ms": 11.3855,
+    "mean_generation_plus_features_ms": 41.7509,
+    "roll_types": {
+      "mixed": {
+        "mean_ordered_paths": 92.125,
+        "mean_ordered_generation_ms": 1.1389,
+        "mean_generation_plus_features_ms": 4.9093
+      },
+      "doubles": {
+        "mean_ordered_paths": 3984.875,
+        "mean_ordered_generation_ms": 21.6321,
+        "mean_generation_plus_features_ms": 78.5925
+      }
+    },
+    "policies": {
+      "baseline": {
+        "mean_decision_ms": 33.3209,
+        "median_decision_ms": 8.575000000064392,
+        "decisions_per_second": 30.01118851810245,
+        "mean_rank_only_ms": 3.6597
+      },
+      "sprinter": {
+        "mean_decision_ms": 33.4706,
+        "median_decision_ms": 7.374229499873763,
+        "decisions_per_second": 29.876960598181206,
+        "mean_rank_only_ms": 3.682
+      },
+      "fortress": {
+        "mean_decision_ms": 34.4642,
+        "median_decision_ms": 8.226520499874823,
+        "decisions_per_second": 29.015587198396027,
+        "mean_rank_only_ms": 4.0255
+      },
+      "saboteur": {
+        "mean_decision_ms": 34.2003,
+        "median_decision_ms": 9.558311999967373,
+        "decisions_per_second": 29.23954679863792,
+        "mean_rank_only_ms": 4.6183
+      },
+      "assassin": {
+        "mean_decision_ms": 33.1123,
+        "median_decision_ms": 9.317208000084065,
+        "decisions_per_second": 30.200263738796643,
+        "mean_rank_only_ms": 3.1956
+      },
+      "blockader": {
+        "mean_decision_ms": 34.7828,
+        "median_decision_ms": 7.502499499992155,
+        "decisions_per_second": 28.749859517626493,
+        "mean_rank_only_ms": 3.9364
+      },
+      "optimizer": {
+        "mean_decision_ms": 36.5988,
+        "median_decision_ms": 8.666770500099119,
+        "decisions_per_second": 27.32331621026631,
+        "mean_rank_only_ms": 5.6891
+      },
+      "hoarder": {
+        "mean_decision_ms": 33.7651,
+        "median_decision_ms": 8.734561999972357,
+        "decisions_per_second": 29.616354880078532,
+        "mean_rank_only_ms": 4.0416
+      },
+      "random": {
+        "mean_decision_ms": 2.4343,
+        "median_decision_ms": 0.6125204999989364,
+        "decisions_per_second": 410.78767194471044,
+        "mean_rank_only_ms": null
+      }
+    }
+  }
+}

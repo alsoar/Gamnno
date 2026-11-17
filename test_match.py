@@ -8,6 +8,8 @@ from unittest.mock import patch
 from uuid import UUID
 
 import backgammon as game
+import heuristic
+from agents import AGENT_NAMES, create_agent
 from match import Match
 from visualizer import _native_color, _native_move
 
@@ -20,7 +22,7 @@ def match_at(points, bars, dice, human_color=game.WHITE):
 
 
 class MatchTests(unittest.TestCase):
-    def test_seeded_game_controls_both_actor_turns_and_matches_the_archived_game(self):
+    def test_controller_reproduces_archive_when_fed_the_original_policy(self):
         archive = json.loads(Path(__file__).with_name("replay-2095.json").read_text())
         for human in (game.WHITE, game.BROWN):
             with self.subTest(human=human):
@@ -38,12 +40,14 @@ class MatchTests(unittest.TestCase):
                                 self.assertTrue(match.preview()[2])
                                 match.finish_human_turn()
                         else:
-                            match.play_bot_turn()
+                            with patch.object(match.agent, "choose_turn", side_effect=heuristic.choose_turn):
+                                match.play_bot_turn()
                         self.assertEqual(len(match.turns), number)
-                        self.assertEqual(match.turns[-1], saved)
+                        self.assertEqual({k: match.turns[-1][k] for k in saved}, saved)
                 self.assertEqual(match.winner, game.WHITE)
                 replay = match.recording()
-                self.assertEqual({key: replay[key] for key in archive}, archive)
+                for key in ("opening", "winner", "seed"):
+                    self.assertEqual(replay[key], archive[key])
                 others = {"white": "human" if human == game.WHITE else "baseline",
                           "brown": "human" if human == game.BROWN else "baseline"}
                 self.assertEqual(replay["players"], others)
@@ -51,7 +55,17 @@ class MatchTests(unittest.TestCase):
                 self.assertEqual(datetime.fromisoformat(replay["completed_at"]).utcoffset(), timedelta())
                 self.assertEqual(json.loads(json.dumps(replay)), replay)
                 replay["turns"].clear()
-                self.assertEqual(match.recording()["turns"], archive["turns"])
+                self.assertEqual(len(match.recording()["turns"]), len(archive["turns"]))
+
+    def test_every_registered_opponent_plays_the_turn_it_selected(self):
+        for name in AGENT_NAMES:
+            with self.subTest(name=name):
+                match = Match.new(human_color=game.BROWN, seed=2095, opponent=name)
+                expected = create_agent(name, seed=f"opponent/2095/{name}").choose_turn(match.state, match.dice)
+                match.play_bot_turn()
+                self.assertEqual(match.state, expected.state)
+                self.assertEqual(tuple(map(_native_move, match.turns[-1]["moves"])), expected.moves)
+                self.assertTrue(match.turns[-1]["explanation"])
 
     def test_undo_does_not_commit_moves_frames_or_consume_a_new_roll(self):
         match = match_at({8: 1, 12: 14, 6: -1, 2: -1}, (0, 13), (2, 3))
@@ -91,7 +105,8 @@ class MatchTests(unittest.TestCase):
                     match.finish_human_turn()
                 else:
                     match.play_bot_turn()
-                self.assertEqual(match.turns, [{"player": 0, "roll": [1, 3], "moves": [], "boards": []}])
+                saved = {"player": 0, "roll": [1, 3], "moves": [], "boards": []}
+                self.assertEqual({k: match.turns[0][k] for k in saved}, saved)
                 self.assertEqual(match.state, game.apply_turn(start, (1, 3), ()))
 
     def test_bearoff_wins_on_first_die_and_is_committed_immediately(self):

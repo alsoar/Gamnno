@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import backgammon as game
 import heuristic
+from agents import AGENT_NAMES, create_agent
 from visualizer import _native_move, game_response
 
 
@@ -52,6 +53,21 @@ class VisualizerTests(unittest.TestCase):
                 selected = game_response("/api/heuristic", payload)
                 self.assertEqual(tuple(map(_native_move, selected["moves"])), expected.moves)
                 self.assertEqual(selected["board"], game.to_legacy(expected.state))
+
+    def test_named_agents_can_finish_a_partly_played_roll(self):
+        prefix = game_response("/api/choices", self.payload)["options"][:1]
+        native = tuple(map(_native_move, prefix))
+        start = game.starting_state()
+        for name in AGENT_NAMES:
+            with self.subTest(name=name):
+                result = game_response("/api/agent", dict(self.payload, agent=name, prefix=prefix))
+                moves = tuple(map(_native_move, result["moves"]))
+                self.assertEqual(moves[:1], native)
+                self.assertEqual(result["board"], game.to_legacy(game.apply_turn(start, self.payload["dice"], moves)))
+                self.assertTrue(result["explanation"])
+                if name != "random":
+                    expected = create_agent(name).choose_turn(start, self.payload["dice"], prefix=native)
+                    self.assertEqual(moves, expected.moves)
 
     def test_heuristic_can_take_over_a_partly_played_human_turn(self):
         initial = game_response("/api/heuristic", self.payload)

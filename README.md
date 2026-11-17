@@ -15,19 +15,29 @@ python -m pip install -r requirements.txt
 python -m streamlit run streamlit_app.py
 ```
 
-**Play** starts a game against the current deterministic baseline. Choose
-**New game** to change your color. Select a legal source and destination
+**Play** starts a game against Baseline. Choose **New game** to select
+your color and opponent. Baseline, Sprinter, Fortress, Saboteur, Assassin,
+Blockader, Optimizer, Hoarder and Random all use the same rules. Select a legal source and destination
 on the board, or use the move controls alongside it. You can undo a move
 before ending your turn. After either player wins, **Save to History** adds
-the completed game once, with both players, every roll, and each checker move.
+the completed game once, with both players, every roll, each checker move and
+the bot’s turn explanations.
 
 ![The magnno Play tab with the interactive board and legal move controls](streamlit-preview.png)
 
 **Game history** contains all 100 bot-versus-bot games from the revised
 experiment (seeds 2026–2125), as well as saved human-versus-bot games. Filter
 by matchup, pick a game, and step or scrub from the opening to the winning
-move. Each record identifies which color belonged to the human or the baseline.
+move. Each record identifies both players by color and strategy.
 Seed 2095 is the shortest baseline game at 13 turns.
+
+**Tournament** displays the head-to-head matrix and playing styles measured
+in the bundled round robin. The simulation cap is **2,000 player turns**,
+including the opening turn and forced passes. A winning move on turn 2,000 counts.
+Switch denominators to inspect wins among all
+starts, wins among completed games, or games that reached the turn limit.
+To inspect a different run, set `MAGNNO_TOURNAMENT_REPORT` to the JSON
+file written by the tournament or matchup command before starting Streamlit.
 
 Human games are shared by visitors to the same app instance once saved.
 By default the app writes them to `data/history.sqlite3`. Set
@@ -44,8 +54,8 @@ bundled histories with verification against the original experiment, run
 Run `python visualizer.py` for the original browser table. On a Mac you
 can also double-click **Play.command**. The launcher uses
 `.venv/bin/python` if you created a virtual environment in the project.
-Choose a game against a random opponent (you play White), two people on one
-screen, or random players with pause and step controls. Select a checker,
+Select a human or any registered agent for White and Brown independently.
+You can watch two agents using the pause and step controls. Select a checker,
 then a highlighted destination. **Board state** shows the signed point counts
 and separate bar counts. Stop the local server with Ctrl-C.
 
@@ -114,12 +124,45 @@ codes outside the physical board. Both colors share those codes.
 
 The ordinary play rules follow the [U.S. Backgammon Federation's rules](https://usbgf.org/backgammon-basics-how-to-play/).
 
-## Deterministic heuristic player
+## Agent framework
+
+Choose a policy by stable name. The same interface works in live matches,
+color-swapped matchups, self-play, and tournaments.
+
+```python
+from random import Random
+from agents import create_agent
+import backgammon as game
+
+state = game.starting_state()
+agent = create_agent("optimizer", config={"bar_penalty": 4, "sacrifice_threshold": 0.4})
+turn = agent.choose_turn(state, (2, 3))
+print(agent.explain(state, turn))
+
+rng = Random(2026)
+# Draw from a fixed opponent distribution for successive games.
+opponent = create_agent(rng.choices(["sprinter", "fortress", "random"], weights=[4, 4, 2])[0],
+                        seed=rng.getrandbits(64))
+```
+
+```sh
+python simulation.py matchup sprinter fortress --games 20 --max-turns 2000 --out matchup.json
+python simulation.py tournament --games 20 --seed 2026 --max-turns 2000 --workers 7 --out tournament.json
+python simulation.py tournament --games 2 --seed 7401 --max-turns 2000 --sample-every 20 --positions samples.sqlite --out sample-run.json
+python benchmark_agents.py --games 90 --rounds 2 --out timings.json
+```
+
+- Read the [decision trees, sacrifice thresholds and parameters](AGENTS_GUIDE.md) and [shared feature definitions](FEATURES.md).
+- See [simulation, statistics and compact training records](SIMULATION.md) for the experiment conventions and data reader.
+- Inspect the [measured tournament and benchmark results](results/REPORT.md), the [full machine-readable tournament](results/round-robin.json) and a [sample of labeled positions](results/sample-positions.sqlite).
+
+## Historical baseline
 
 `heuristic.choose_turn(state, dice)` scores legal full turns, including
 alternative move orders, and returns its chosen moves and next state. The
-visualizer includes modes to play against the heuristic or watch it play both
-colors. The following command runs a reproducible experiment.
+archived 100-game experiment uses this original blot-based policy. The
+registry’s Baseline uses effective vulnerability and the shared capture-value
+definition. The following command reproduces the historical policy experiment.
 
 ```sh
 python3 selfplay.py --games 100 --seed 2026 --turn-limit 300

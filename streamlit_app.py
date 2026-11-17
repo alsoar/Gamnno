@@ -8,6 +8,7 @@ import streamlit as st
 from history_store import HistoryStore
 from history_tab import render_history
 from play_tab import render_play
+from tournament_tab import render_tournament
 
 
 ROOT = Path(__file__).resolve().parent
@@ -45,8 +46,10 @@ st.html("""
 """)
 
 store = open_history(os.environ.get("MAGNNO_HISTORY_DB", str(ROOT / "data" / "history.sqlite3")))
-play, history = st.tabs(["Play", "Game history"])
+play, history, tournament = st.tabs(["Play", "Game history", "Tournament"])
 with play:
     render_play(store)
 with history:
     render_history(store)
+with tournament:
+    render_tournament()

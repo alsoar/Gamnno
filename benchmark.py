@@ -10,6 +10,7 @@ from time import perf_counter
 import numpy as np
 
 import backgammon as game
+from selfplay import DEFAULT_MAX_TURNS
 
 
 def cases():
@@ -161,7 +162,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rounds", type=int, default=3, help="repetitions of the 288-call generation suite")
     parser.add_argument("--games", type=int, default=6, help="games per policy")
-    parser.add_argument("--turn-limit", type=int, default=300, help="maximum player turns per game")
+    parser.add_argument("--turn-limit", type=int, default=DEFAULT_MAX_TURNS, help="maximum player turns per game")
     parser.add_argument("--seed", type=int, default=2026, help="first game seed; later games add one")
     args = parser.parse_args()
     if min(args.rounds, args.games, args.turn_limit) < 1:

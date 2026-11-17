@@ -1,0 +1,86 @@
+{
+  "source": "sample-positions.sqlite",
+  "selection_seed": 2026,
+  "requested": 100,
+  "positions_compared": 100,
+  "logged_rows_examined": 2917,
+  "repeated_position_roll_skipped": 0,
+  "unique_inputs_by_source": {
+    "assassin": 512,
+    "baseline": 288,
+    "blockader": 57,
+    "fortress": 219,
+    "hoarder": 99,
+    "optimizer": 438,
+    "random": 324,
+    "saboteur": 879,
+    "sprinter": 101
+  },
+  "inputs_checked_for_alternatives": 105,
+  "forced_position_roll_skipped": 5,
+  "source_actors": {
+    "assassin": 11,
+    "baseline": 11,
+    "blockader": 11,
+    "fortress": 11,
+    "hoarder": 11,
+    "optimizer": 11,
+    "random": 11,
+    "saboteur": 12,
+    "sprinter": 11
+  },
+  "selection_sha256": "a53071a975a70547944eaeacfa7b4388b9c55ee1511f45738b62d223b6395578",
+  "selection": "Deduplicate state and unordered roll by earliest archive occurrence. Rotate across source actors in seed-shuffled order, taking each actor's next seeded hash-ranked input with at least two legal final boards. Redistribute unfilled slots to the remaining actors.",
+  "pairs": [
+    {
+      "agents": [
+        "fortress",
+        "hoarder"
+      ],
+      "same_moves": 13,
+      "same_final_board": 13,
+      "same_moves_fraction": 0.13,
+      "same_final_board_fraction": 0.13
+    },
+    {
+      "agents": [
+        "baseline",
+        "assassin"
+      ],
+      "same_moves": 51,
+      "same_final_board": 51,
+      "same_moves_fraction": 0.51,
+      "same_final_board_fraction": 0.51
+    },
+    {
+      "agents": [
+        "fortress",
+        "blockader"
+      ],
+      "same_moves": 25,
+      "same_final_board": 25,
+      "same_moves_fraction": 0.25,
+      "same_final_board_fraction": 0.25
+    },
+    {
+      "agents": [
+        "sprinter",
+        "optimizer"
+      ],
+      "same_moves": 29,
+      "same_final_board": 29,
+      "same_moves_fraction": 0.29,
+      "same_final_board_fraction": 0.29
+    },
+    {
+      "agents": [
+        "saboteur",
+        "assassin"
+      ],
+      "same_moves": 34,
+      "same_final_board": 34,
+      "same_moves_fraction": 0.34,
+      "same_final_board_fraction": 0.34
+    }
+  ]
+}

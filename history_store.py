@@ -11,6 +11,7 @@ import sqlite3
 import zlib
 
 import backgammon as game
+from agents import AGENT_NAMES
 from visualizer import _native_color, _native_move
 
 
@@ -66,8 +67,8 @@ def _validate(record):
         completed_at, winner, turns = record["completed_at"], record["winner"], record["turns"]
         if not isinstance(game_id, str) or not game_id.strip() or type(seed) is not int:
             raise ValueError("a recording needs an id and an integer seed")
-        if set(players) != {"white", "brown"} or any(role not in ("human", "baseline") for role in players.values()):
-            raise ValueError("choose a human or baseline player for each color")
+        if set(players) != {"white", "brown"} or any(role != "human" and role not in AGENT_NAMES for role in players.values()):
+            raise ValueError("choose a human or registered agent for each color")
         if not isinstance(completed_at, str):
             raise ValueError("completed_at must be a UTC timestamp")
         stamp = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))

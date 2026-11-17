@@ -12,7 +12,7 @@ import heuristic
 
 
 DEFAULT_SEED = 2026
-DEFAULT_MAX_TURNS = 300
+DEFAULT_MAX_TURNS = 2000
 
 
 class GameResult(NamedTuple):

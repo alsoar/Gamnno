@@ -103,9 +103,12 @@ choose the reflected turn.
 python3 selfplay.py --games 100 --seed 2026 --turn-limit 300
 ```
 
-`play_game(agent_white, agent_brown, seed=None, max_turns=300)` returns the
+The command above explicitly uses the historical experiment's 300-turn limit.
+The current default is 2,000 player turns.
+
+`play_game(agent_white, agent_brown, seed=None, max_turns=2000)` returns the
 winner, observed turn count, move/event totals and final state.
-`simulate_games(n_games, agent_white, agent_brown, seed=2026, max_turns=300)`
+`simulate_games(n_games, agent_white, agent_brown, seed=2026, max_turns=2000)`
 returns the aggregate statistics as a JSON-ready dictionary. Pass a callable
 or an object with a `choose_turn(state, dice)` method. The default seed for
 both entry points is 2026. Game zero uses the supplied seed and each
