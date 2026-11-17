@@ -14,6 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import backgammon as game
 import synthetic_audit as audit
+from synthetic_store import VALUE_SCHEMA
 
 
 class AuditTests(unittest.TestCase):
@@ -97,14 +98,16 @@ class AuditTests(unittest.TestCase):
                 if case == "late_omission":
                     db.execute("INSERT INTO samples VALUES(?,?,?,?,?)",("a",4,game.state_key(game.starting_state(-1)),0,0))
                 (root/"train").mkdir()
-                pq.write_table(pa.Table.from_pylist([row]*(2 if case=="same_turn_twice" else 1)),root/"train/data.parquet")
+                schema = VALUE_SCHEMA.append(pa.field("die1",pa.uint8())) if case=="future_die" else VALUE_SCHEMA
+                pq.write_table(pa.Table.from_pylist([row]*(2 if case=="same_turn_twice" else 1),schema=schema),
+                               root/"train/data.parquet")
                 if case in ("leak","mirrored_leak"):
                     (root/"test").mkdir()
                     b = dict(row,game_id="b")
                     if case=="mirrored_leak":
                         b.update(board=other[:24],white_bar=other[24],brown_bar=other[25],
                                  player_to_move=-1,win_target=0)
-                    pq.write_table(pa.Table.from_pylist([b]),root/"test/data.parquet")
+                    pq.write_table(pa.Table.from_pylist([b],schema=VALUE_SCHEMA),root/"test/data.parquet")
                 if case in ("valid","valid_mirror_filter"):
                     diversity,positions,dropped = audit._audit_positions(root,db,scratch,metadata)
                     self.assertEqual((diversity["unique"],dropped),(1,1))

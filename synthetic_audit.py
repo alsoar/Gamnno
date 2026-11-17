@@ -399,8 +399,16 @@ class PositionStats:
 
 
 def _audit_positions(root, db, scratch, metadata):
+    import pyarrow as pa
     import pyarrow.parquet as pq
 
+    expected_types = {
+        "game_id":pa.string(),"board":pa.binary(24),"generation_seed":pa.int64(),
+        **dict.fromkeys(("game_length","turn_number","position_id"),pa.uint32()),
+        **dict.fromkeys(("white_agent","brown_agent","matchup_category"),pa.uint16()),
+        **dict.fromkeys(("player_to_move","winner"),pa.int8()),
+        **dict.fromkeys(("white_bar","brown_bar","win_target","game_phase","mixture_type","source_policy_metadata"),pa.uint8()),
+    }
     scratch.execute("""CREATE TABLE exported(game_id TEXT,turn INTEGER,PRIMARY KEY(game_id,turn))
                     WITHOUT ROWID""")
     index = StateIndex(scratch)
@@ -409,6 +417,8 @@ def _audit_positions(root, db, scratch, metadata):
         for file in sorted((root/split).rglob("*.parquet")):
             parquet = pq.ParquetFile(file)
             require(set(parquet.schema_arrow.names) == VALUE_COLUMNS, f"unexpected value columns in {file.name}")
+            require(all(parquet.schema_arrow.field(k).type == v for k,v in expected_types.items()),
+                    f"value column type differs in {file.name}")
             for batch in parquet.iter_batches(batch_size=2048):
                 for row in batch.to_pylist():
                     gid, turn = row["game_id"], row["turn_number"]
@@ -417,9 +427,7 @@ def _audit_positions(root, db, scratch, metadata):
                         WHERE s.game_id=? AND s.turn_number=?""", (gid,turn)).fetchone()
                     require(stored is not None, f"{gid}/{turn}: missing source sample")
                     board = row["board"]
-                    if not isinstance(board, bytes):
-                        board = bytes(x % 256 for x in board)
-                    require(len(board) == 24, f"{gid}/{turn}: wrong number of points")
+                    require(isinstance(board,bytes) and len(board) == 24, f"{gid}/{turn}: wrong number of points")
                     actor, winner = row["player_to_move"], row["winner"]
                     require(actor in (-1,1) and winner in (-1,1), f"{gid}/{turn}: invalid actor or winner")
                     wire = board + struct.pack("BBb",row["white_bar"],row["brown_bar"],actor)
@@ -443,7 +451,7 @@ def _audit_positions(root, db, scratch, metadata):
                         raise AuditError(f"{gid}/{turn}: duplicate exported position") from error
                     index.add(wire,split)
                     stats[split].add(row,wire,white if actor==1 else brown,strategy,category,f"{white} vs {brown}")
-    dropped = 0
+    drops = Counter({split:0 for split in SPLITS})
     for gid,turn,state,split in db.execute(
         "SELECT s.game_id,s.turn_number,s.state,g.split FROM samples s JOIN games g USING(game_id)"
     ):
@@ -451,7 +459,7 @@ def _audit_positions(root, db, scratch, metadata):
             continue
         owner = scratch.execute("SELECT split FROM model_inputs WHERE state=?", (_actor_key(state),)).fetchone()
         require(owner and owner[0] != split, f"{gid}/{turn}: source row missing without cross-split duplicate")
-        dropped += 1
+        drops[split] += 1
     distribution_by_split = {}
     for split, pos in stats.items():
         histogram = Counter()
@@ -459,7 +467,7 @@ def _audit_positions(root, db, scratch, metadata):
             count, = scratch.execute("SELECT COUNT(*) FROM exported WHERE game_id=?", (gid,)).fetchone()
             histogram[count] += 1
         distribution_by_split[split] = dict(pos.report(), samples_per_completed_game=distribution(histogram))
-    return index.report(), distribution_by_split, dropped
+    return dict(index.report(), candidate_drops_by_split=dict(drops)), distribution_by_split, sum(drops.values())
 
 
 def _audit_catalog(root, db, scratch):
@@ -568,10 +576,11 @@ def _markdown(r):
                 "use the active player's position after its turn. Eligibility uses both players after each turn.", "",
                 "## Performance", "", "| Measurement | Value |", "|---|---:|"])
     for key, value in r["performance"].items():
-        if isinstance(value,(float,int)):
+        if isinstance(value,(float,int)) or value is None:
             out.append(f"| {key.replace('_',' ')} | {_display(value,',.3f')} |")
     out.extend(["", "Generation wall time and worker time measure different quantities. Mean worker simulation time "
-                "is per attempted game. Serialization speed uses bytes written divided by measured serialization time.",
+                "is per attempted game. Serialization speed uses bytes written divided by measured serialization time. "
+                "A dash means a measurement was unavailable. " + r["performance"].get("memory_scope",""),
                 "", "## Observations", ""])
     out.extend("- " + line for line in r["observations"])
     return "\n".join(out) + "\n"
@@ -644,7 +653,7 @@ def audit(dataset_dir, *, verify_seeds=0, write_report=True):
     """
     from synthetic_game import SamplingConfig
     from synthetic_plan import PlanConfig, make_plan, spec_for
-    from synthetic_store import evidence_db
+    from synthetic_store import evidence_db, write_json
     from agents import AGENT_NAMES
 
     require(isinstance(verify_seeds,int) and verify_seeds >= -1, "invalid seed verification count")
@@ -706,12 +715,16 @@ def audit(dataset_dir, *, verify_seeds=0, write_report=True):
     num_drops = sum(cross_split.values()) if isinstance(cross_split,dict) else cross_split
     if has_candidate_checkpoint:
         require(dropped == num_drops, "cross-split removal count differs")
+        if isinstance(cross_split,dict):
+            require(cross_split == diversity["candidate_drops_by_split"], "cross-split removal counts per split differ")
         require(coverage["candidate_positions_examined"] == manifest["binary_rows_before_filter"],
                 "candidate sample count differs")
     performance = dict(manifest["performance"])
     performance["mean_worker_simulation_seconds_per_attempt"] = _rate(performance["simulation_worker_seconds"],observed)
     performance["serialization_bytes_per_second"] = _rate(performance["serialization_bytes"],
                                                             performance["serialization_seconds"])
+    if not has_candidate_checkpoint:
+        diversity["candidate_drops_by_split"] = None
     coverage["checked_file_sha256"] = checked_files
     coverage["has_prefilter_checkpoint"] = has_candidate_checkpoint
     coverage["audit_seconds"] = perf_counter() - start
@@ -723,8 +736,10 @@ def audit(dataset_dir, *, verify_seeds=0, write_report=True):
     if write_report:
         destination = root/"reports"
         destination.mkdir(parents=True,exist_ok=True)
-        (destination/"report.json").write_text(json.dumps(result,indent=2,allow_nan=False)+"\n")
-        (destination/"REPORT.md").write_text(_markdown(result))
+        write_json(destination/"report.json",result)
+        pending = destination/"REPORT.md.tmp"
+        pending.write_text(_markdown(result))
+        pending.replace(destination/"REPORT.md")
     return result
 
 

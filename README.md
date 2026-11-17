@@ -156,6 +156,10 @@ python benchmark_agents.py --games 90 --rounds 2 --out timings.json
 - See [simulation, statistics and compact training records](SIMULATION.md) for the experiment conventions and data reader.
 - Inspect the [measured tournament and benchmark results](results/REPORT.md), the [full machine-readable tournament](results/round-robin.json) and a [sample of labeled positions](results/sample-positions.sqlite).
 
+## Synthetic value dataset
+
+The [synthetic data guide](SYNTHETIC_DATA.md) covers the 5,000-game pilot, the separate 80,000-game command, and loading pre-roll positions or replaying trajectories. Each labeled position comes from a completed game and carries the actual outcome for the side to move.
+
 ## Historical baseline
 
 `heuristic.choose_turn(state, dice)` scores legal full turns, including
