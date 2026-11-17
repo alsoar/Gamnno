@@ -79,7 +79,7 @@ def _observe(stats, other, candidate):
     other["eligible_plies"] += int(candidate.opp_after.eligible)
 
 
-def _play(white, brown, seed, max_turns, game_id, sample_every):
+def _play(white, brown, seed, max_turns, game_id, sample_every, *, observer=None):
     # Independent die, per-agent action, and logging streams keep dice pairing
     # intact across passes, different game lengths, and random decision counts.
     dice_rng = Random(seed)
@@ -92,6 +92,8 @@ def _play(white, brown, seed, max_turns, game_id, sample_every):
     stats = {game.WHITE: Counter(), game.BROWN: Counter()}
     actor, roll = game.opening_roll(dice_rng)
     state = game.starting_state(actor)
+    if observer is not None:
+        observer.opened(state)
     samples = []
     for number in range(1, max_turns + 1):
         actor = int(state.player)
@@ -104,6 +106,8 @@ def _play(white, brown, seed, max_turns, game_id, sample_every):
         else:
             features = choose_candidate(state, roll, rng=action_rng[actor])
             chosen = features.turn
+        if observer is not None:
+            observer.chosen(number, state, roll, agent, features)
         _observe(stats[actor], stats[-actor], features)
         if sample_rng is not None and (sample_every == 1 or sample_rng.randrange(sample_every) == 0):
             samples.append(pack_sample(number, state, roll, chosen, feature_record(features)))
@@ -112,6 +116,8 @@ def _play(white, brown, seed, max_turns, game_id, sample_every):
         if winner is not None or number == max_turns:
             return GameResult(game_id, seed, white.name, brown.name, winner, number,
                               stats[game.WHITE], stats[game.BROWN], samples)
+        if observer is not None:
+            observer.before_roll(number + 1, state)
         roll = game.roll_dice(dice_rng)
 
 
