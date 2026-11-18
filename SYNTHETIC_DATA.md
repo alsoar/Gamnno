@@ -48,7 +48,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from synthetic_store import state_from_row, value_input
 
-root = Path("data/synthetic_v1/pilot")  # or the directory of a downloaded snapshot
+root = Path("datasets/synthetic_v1/pilot")  # bundled snapshot; use your output path for a new run
 for shard in sorted((root / "train").glob("part-*.parquet")):
     for batch in pq.ParquetFile(shard).iter_batches(batch_size=1024):
         for row in batch.to_pylist():
