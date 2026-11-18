@@ -2,6 +2,7 @@
 
 from collections import Counter
 from contextlib import closing
+import json
 from pathlib import Path
 from random import Random
 import sqlite3
@@ -14,10 +15,55 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import backgammon as game
 import synthetic_audit as audit
-from synthetic_store import VALUE_SCHEMA
+from synthetic_store import VALUE_SCHEMA, append_game, journal
 
 
 class AuditTests(unittest.TestCase):
+    def test_explicit_seed_verification_also_regenerates_archived_game(self):
+        from synthetic_game import SamplingConfig, simulate
+        from synthetic_plan import PlanConfig, make_plan, spec_for
+        plan = PlanConfig(target_games=1,heldout_games=0,max_turns=1)
+        spec = spec_for(make_plan(plan)[0],0,plan)
+        sampling = SamplingConfig()
+        played = simulate(spec,plan,sampling,record_trajectory=True)
+        with TemporaryDirectory() as temp, closing(journal(Path(temp)/"journal.db")) as db:
+            with db:
+                append_game(db,spec,played,.1,10)
+            with patch("synthetic_game.simulate",wraps=simulate) as regenerate:
+                _, coverage = audit._read_games(db,sampling.phase_thresholds,lambda row:(spec,plan),sampling,1)
+            self.assertEqual(regenerate.call_count,1)
+            self.assertEqual(coverage["regenerated_games"],1)
+            self.assertEqual(coverage["trajectory_games"],1)
+            self.assertEqual(coverage["games_without_offline_replay"],0)
+            self.assertEqual(coverage["regenerated_game_ids"],[spec.game_id])
+
+    def test_resource_limit_is_reported_separately_from_completion_target(self):
+        plan = SimpleNamespace(target_games=5000,heldout_games=100,max_turns=2000)
+        data = dict(maximum_total_attempts=10000,primary_completed_game_target=5000,
+                    heldout_completed_game_target=100,max_player_turns=2000,
+                    checkpoint_attempts_before_resume=2613,new_attempt_budget_on_resume=7387)
+        with TemporaryDirectory() as temp:
+            root=Path(temp)
+            self.assertIsNone(audit._resource_budget(root,10000,plan))
+            (root/"reports").mkdir()
+            (root/"reports/resource-budget.json").write_text(json.dumps(data))
+            result=audit._resource_budget(root,10000,plan)
+            self.assertTrue(result["attempt_budget_exhausted"])
+            self.assertEqual(result["attempts_remaining"],0)
+            self.assertEqual(result["source"],"reports/resource-budget.json")
+            with self.assertRaises(audit.AuditError):
+                audit._resource_budget(root,10001,plan)
+
+    def test_seed_selection_covers_categories_then_new_wrapper_types(self):
+        with closing(sqlite3.connect(":memory:")) as db:
+            db.execute("CREATE TABLE games(game_id TEXT,category TEXT,mixture_type TEXT)")
+            db.executemany("INSERT INTO games VALUES(?,?,?)",[
+                ("a","cross","pure"),("b","cross","pure"),("c","mixture","turn"),
+                ("d","noise","noisy"),("e","mixture","game"),("f","mixture","turn")])
+            self.assertEqual(audit._verification_games(db,0),set())
+            self.assertEqual(audit._verification_games(db,4),{"a","c","d","e"})
+            self.assertEqual(audit._verification_games(db,5),{"a","b","c","d","e"})
+
     def test_wire_integrity_and_percentiles(self):
         state = game.starting_state(game.BROWN)
         self.assertEqual(audit.validate_wire(game.state_key(state)),state)

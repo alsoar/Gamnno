@@ -160,6 +160,15 @@ python benchmark_agents.py --games 90 --rounds 2 --out timings.json
 
 The [synthetic data guide](SYNTHETIC_DATA.md) covers the 5,000-game pilot, the separate 80,000-game command, and loading pre-roll positions or replaying trajectories. Each labeled position comes from a completed game and carries the actual outcome for the side to move.
 
+The [published pilot report](datasets/synthetic_v1/pilot/reports/REPORT.md)
+covers 10,000 attempts under the 2,000-turn cap. The archive contains 4,682
+completed primary games and 100 completed held-out games, with 68,478 primary
+and 1,369 held-out value positions. The agreed attempt budget stopped the
+primary target 318 games short. The report quantifies the resulting policy
+coverage and phase shortfalls. Download or clone the
+[portable dataset](datasets/synthetic_v1/pilot) and follow the loading examples
+in the guide.
+
 ## Historical baseline
 
 `heuristic.choose_turn(state, dice)` scores legal full turns, including

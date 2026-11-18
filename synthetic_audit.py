@@ -4,6 +4,7 @@ import argparse
 from collections import Counter, defaultdict
 from contextlib import closing
 import hashlib
+from itertools import zip_longest
 import json
 import math
 from pathlib import Path
@@ -132,6 +133,7 @@ def outcomes(counter):
 class Cohort:
     def __init__(self):
         self.seats = defaultdict(Counter)
+        self.selfplay = defaultdict(Counter)
         self.matchups = defaultdict(Counter)
         self.categories = defaultdict(Counter)
         self.subcategories = defaultdict(Counter)
@@ -143,6 +145,7 @@ class Cohort:
         self.moves = defaultdict(Counter)
         self.opener = Counter()
         self.visits = Counter()
+        self.visits_by_outcome = {"completed":Counter(), "unfinished":Counter()}
 
     def add(self, entry, stats):
         n, win = entry["turns"], entry["winner"]
@@ -153,6 +156,12 @@ class Cohort:
         for group in (category, subcategory, split, matchup, self.opener):
             group["attempts"] += 1
             group["total_turns"] += n
+        if entry["category"] == "pure_selfplay":
+            group = self.selfplay[entry["white_agent"]]
+            group["attempts"] += 1
+            group["total_turns"] += n
+            if win is not None:
+                group["wins" if win == game.WHITE else "losses"] += 1
         self.lengths[n] += 1
         if win is None:
             self.reasons[entry["reason"]] += 1
@@ -173,6 +182,8 @@ class Cohort:
             value = stats["white"].get(key, 0) + stats["brown"].get(key, 0)
             self.moves[key][value] += 1
         self.visits.update(dict(zip(PHASES,stats["phase_visits"])))
+        self.visits_by_outcome["unfinished" if win is None else "completed"].update(
+            dict(zip(PHASES,stats["phase_visits"])))
 
     @staticmethod
     def _group(counter):
@@ -187,11 +198,13 @@ class Cohort:
             "completed_game_turns": distribution(self.finished_lengths),
             "unfinished_reasons": dict(self.reasons),
             "by_agent": {k:self._group(v) for k,v in sorted(self.seats.items())},
+            "by_pure_selfplay_policy": {k:self._group(v) for k,v in sorted(self.selfplay.items())},
             "by_matchup": [{"white":w,"brown":b,**self._group(v)} for (w,b),v in sorted(self.matchups.items())],
             "by_category": {k:self._group(v) for k,v in sorted(self.categories.items())},
             "by_subcategory": {k:self._group(v) for k,v in sorted(self.subcategories.items())},
             "by_split": {k:self._group(v) for k,v in sorted(self.splits.items())},
             "phase_visits_before_sampling": dict(self.visits),
+            "phase_visits_by_outcome": {k:dict(v) for k,v in self.visits_by_outcome.items()},
             "per_attempt_distributions": {k:distribution(v) for k,v in self.moves.items()},
             "behavior": {
                 "total_actor_turns": b["own_turns"], "total_checker_steps": b["checker_moves"],
@@ -290,12 +303,29 @@ def _check_trajectory(blob, entry, samples, spec, stats):
     return matched
 
 
+def _verification_games(db, limit):
+    """Prefer one game per category, then wrapper type, then fill in stable game-ID order."""
+    selected = set()
+    for field in ("category","mixture_type"):
+        for gid, in db.execute(f"SELECT MIN(game_id) FROM games GROUP BY {field} ORDER BY {field}"):
+            if len(selected) == limit:
+                return selected
+            selected.add(gid)
+    for gid, in db.execute("SELECT game_id FROM games ORDER BY game_id"):
+        if len(selected) == limit:
+            break
+        selected.add(gid)
+    return selected
+
+
 def _read_games(db, thresholds, plans, sampling, verify_seeds):
-    from synthetic_game import classify_phase, simulate
+    from synthetic_game import classify_phase, iter_trajectory, simulate
     cohorts = {"primary": Cohort(), "heldout_evaluation": Cohort()}
     coverage = Counter({k:0 for k in ("attempts","candidate_positions_examined","trajectory_checked_samples",
                                       "trajectory_games","trajectory_turns","regenerated_games","regenerated_samples",
                                       "games_without_offline_replay","samples_without_offline_replay")})
+    selected = _verification_games(db,verify_seeds) if verify_seeds >= 0 else None
+    regenerated_ids = []
     for g in db.execute("SELECT * FROM games ORDER BY slot_id,attempt"):
         gid = g["game_id"]
         try:
@@ -341,24 +371,32 @@ def _read_games(db, thresholds, plans, sampling, verify_seeds):
                 coverage["trajectory_checked_samples"] += _check_trajectory(g["trajectory"], g, samples, spec, stats)
                 coverage["trajectory_games"] += 1
                 coverage["trajectory_turns"] += n
-            elif verify_seeds == -1 or coverage["regenerated_games"] < verify_seeds:
+            if selected is None or gid in selected:
                 regenerated = simulate(spec, plan_config, sampling, record_trajectory=True)
                 require((regenerated.opener,regenerated.winner,regenerated.turns,regenerated.final,regenerated.policy_trace)
                         == (opener,winner,n,g["final"],trace), "seeded regeneration differs")
+                require(regenerated.stats == stats, "regenerated aggregate statistics differ")
                 generated_samples = {t:(w,p,c) for t,w,p,c in regenerated.samples}
                 require(all(generated_samples.get(t) == s for t,s in samples.items()),
                         "regenerated sample differs")
                 _check_trajectory(regenerated.trajectory,g,samples,spec,stats)
+                if g["trajectory"] is not None:
+                    require(all(a == b for a,b in zip_longest(iter_trajectory(g["trajectory"]),
+                                                             iter_trajectory(regenerated.trajectory))),
+                            "regenerated actions differ from archived trajectory")
                 coverage["regenerated_games"] += 1
                 coverage["regenerated_samples"] += len(samples)
-            else:
+                regenerated_ids.append(gid)
+            elif g["trajectory"] is None:
                 coverage["games_without_offline_replay"] += 1
                 coverage["samples_without_offline_replay"] += len(samples)
             cohort = "heldout_evaluation" if g["split"] == "heldout_evaluation" else "primary"
             cohorts[cohort].add(g, stats)
         except (ValueError, IndexError, KeyError, TypeError) as error:
             raise AuditError(f"{gid}: {error}") from error
-    return {name:c.report() for name,c in cohorts.items()}, dict(coverage)
+    return {name:c.report() for name,c in cohorts.items()}, dict(
+        coverage, regenerated_game_ids=regenerated_ids,
+        seed_selection="First game ID in each category, then each wrapper type, then remaining game IDs, up to the requested count.")
 
 
 class PositionStats:
@@ -514,18 +552,36 @@ def _markdown(r):
     primary = r["games"]["primary"]
     reach = r["validation"]
     d = r["diversity"]
-    out = ["# Synthetic dataset audit", "",
+    allocation = r["allocation"]
+    shortfall = allocation["primary_target"] - allocation["primary_completed"]
+    out = ["# Synthetic dataset audit", ""]
+    if shortfall:
+        out.extend([f"**The primary target remains short by {shortfall:,} completed games.**", ""])
+    else:
+        out.extend([f"The primary target of {allocation['primary_target']:,} completed games was reached.", ""])
+    budget = r.get("resource_budget")
+    if budget:
+        condition = ("is exhausted" if budget["attempt_budget_exhausted"] else
+                     f"has {budget['attempts_remaining']:,} attempts remaining")
+        out.extend([f"The agreed {budget['maximum_total_attempts']:,}-attempt budget {condition}. "
+                    "[Recorded resource budget](resource-budget.json).", ""])
+    out.extend([
            f"The archive contains {r['attempted_games']:,} attempts and {r['completed_games']:,} completed "
            f"games. The value partitions contain {d['positions']:,} pre-roll positions and "
            f"{d['unique']:,} distinct boards including active color. The primary allocation reached "
            f"{r['allocation']['primary_completed']:,} of {r['allocation']['primary_target']:,} completions. "
            f"The separate generalization set reached {r['allocation']['heldout_completed']:,} of "
            f"{r['allocation']['heldout_target']:,}.", "",
+           f"Binary training examples come from games that completed within the {r['max_player_turns']:,}-turn limit. "
+           "The unfinished attempts retain their diagnostics and supply no binary outcome labels. "
+           "When completion rates differ by policy, the training sample emphasizes positions and matchups that "
+           "finish within this limit. This selection also affects the phase and strategy mix.", "",
            "## Validation", "",
            f"The audit checked checkpoint labels, deterministic allocations, player-to-move parity, phase assignments, "
            f"policy traces and the exported Parquet rows. It replayed {reach.get('trajectory_games',0):,} archived "
            f"games and independently checked {reach.get('trajectory_checked_samples',0):,} sampled states against "
-           f"their exact turn. It regenerated {reach.get('regenerated_games',0):,} additional games from their seeds. "
+           f"their exact turn. It also regenerated {reach.get('regenerated_games',0):,} games from their seeds to "
+           "verify the policy choices and complete action sequences. "
            f"{reach.get('games_without_offline_replay',0):,} games ({reach.get('samples_without_offline_replay',0):,} "
            f"sampled states) rely on the simulator's online action and reachability checks.", "",
            f"Exact repeated positions within splits account for {_display(d['repeat_fraction'],'.2%')} of rows. "
@@ -534,7 +590,7 @@ def _markdown(r):
            f"{d['unique_model_inputs']:,} distinct player-normalized model inputs and no cross-split overlap.", "",
            "## Sampling and labels", "",
            "| Split | Positions | Win labels | Early | Middle | Late | Near terminal | On winning turn |",
-           "|---|---:|---:|---:|---:|---:|---:|---:|"]
+           "|---|---:|---:|---:|---:|---:|---:|---:|"])
     for split, s in r["positions"].items():
         p = s["phases"]
         out.append(f"| {split} | {s['count']:,} | {_display(s['winning_label_fraction'],'.1%')} | "
@@ -545,21 +601,56 @@ def _markdown(r):
                 "The final column counts sampled states immediately before the winning turn. "
                 "The near-terminal phase uses board geometry.", "",
                 "## Completion and game lengths", "",
-                "| Cohort | Attempts | Wins | Unfinished | Completion | Median completed turns | 90th percentile | Opening player win rate |",
-                "|---|---:|---:|---:|---:|---:|---:|---:|"])
+                "| Cohort | Attempts | Wins | Unfinished | Completion | Mean completed turns | Median completed turns | 90th percentile | Opening player win rate |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|"])
     for cohort, c in r["games"].items():
         o = c["first_player"]
         out.append(f"| {cohort} | {o['attempted']:,} | {o['completed']:,} | {o['unfinished']:,} | "
-                   f"{_display(o['completion_rate'],'.1%')} | {_display(c['completed_game_turns']['median'])} | "
+                   f"{_display(o['completion_rate'],'.1%')} | {_display(c['completed_game_turns']['mean'])} | "
+                   f"{_display(c['completed_game_turns']['median'])} | "
                    f"{_display(c['completed_game_turns']['p90'])} | {_display(o['win_rate_completed'],'.1%')} |")
     out.extend(["", "Opening-player rates use completed games. Each observed length includes the final turn "
                 "or, for unfinished attempts, every turn through the limit.", "",
                 "### Primary allocation categories", "",
-                "| Category | Target | Attempts | Completed | Unfinished | Completion rate | Mean observed turns |",
-                "|---|---:|---:|---:|---:|---:|---:|"])
+                "| Category | Target | Attempts | Completed | Shortfall | Unfinished | Completion rate | Mean observed turns |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|"])
     for name, row in primary["by_category"].items():
-        out.append(f"| {name} | {r['allocation']['by_category'].get(name,0):,} | {row['attempted']:,} | {row['completed']:,} | {row['unfinished']:,} | "
+        target = r["allocation"]["by_category"].get(name,0)
+        out.append(f"| {name} | {target:,} | {row['attempted']:,} | {row['completed']:,} | "
+                   f"{max(0,target-row['completed']):,} | {row['unfinished']:,} | "
                    f"{_display(row['completion_rate'],'.1%')} | {_display(row['mean_observed_turns'])} |")
+    difficult = primary["by_subcategory"].get("sprinter_saboteur")
+    if difficult:
+        target = allocation["by_subcategory"].get("sprinter_saboteur",0)
+        out.extend(["", f"Sprinter–Saboteur completed {difficult['completed']:,} of {difficult['attempted']:,} attempts "
+                    f"({_display(difficult['completion_rate'],'.1%')}). Its allocation target is {target:,} completed "
+                    f"games, leaving {max(0,target-difficult['completed']):,} unfilled. The finished games provide "
+                    "all binary examples for this matchup. Its unfinished trajectories describe additional "
+                    "positions encountered during play.", ""])
+    selfplay = primary["by_pure_selfplay_policy"]
+    if selfplay:
+        started = sum(v["attempted"] for v in selfplay.values())
+        finished = sum(v["completed"] for v in selfplay.values())
+        out.extend(["", "### Pure self-play coverage", "",
+                    "| Policy | Attempts | Completed | Completion rate | Share of attempts | Share of completed games |",
+                    "|---|---:|---:|---:|---:|---:|"])
+        for name,row in selfplay.items():
+            out.append(f"| {name} | {row['attempted']:,} | {row['completed']:,} | "
+                       f"{_display(row['completion_rate'],'.1%')} | {_display(_rate(row['attempted'],started),'.1%')} | "
+                       f"{_display(_rate(row['completed'],finished),'.1%')} |")
+        out.extend(["", "A self-play game appears once in this table. The generator starts with an evenly distributed "
+                    "policy catalog within one broad self-play completion quota. Retry slots advance through "
+                    "that catalog. Different completion rates can therefore skew both attempted and completed "
+                    "policy shares. The completed-policy shares above measure the resulting representation."])
+    out.extend(["", "### Positions encountered before sampling", "",
+                "| Primary games | Pre-roll visits | Early | Middle | Late | Near terminal |",
+                "|---|---:|---:|---:|---:|---:|"])
+    for outcome, visits in primary["phase_visits_by_outcome"].items():
+        total = sum(visits.values())
+        out.append(f"| {outcome} | {total:,} | "
+                   + " | ".join(_display(_rate(visits.get(p,0),total),".1%") for p in PHASES) + " |")
+    out.extend(["", "These counts include every pre-roll start after the opening. Longer games contribute more "
+                "visits. The per-game sampling limit bounds their contribution to the released value dataset."])
     out.extend(["", "### Primary agent seats", "",
                 "| Policy | Appearances | Completed | Win rate on completions | Mean observed turns |",
                 "|---|---:|---:|---:|---:|"])
@@ -578,11 +669,20 @@ def _markdown(r):
     for key, value in r["performance"].items():
         if isinstance(value,(float,int)) or value is None:
             out.append(f"| {key.replace('_',' ')} | {_display(value,',.3f')} |")
-    out.extend(["", "Generation wall time and worker time measure different quantities. Mean worker simulation time "
-                "is per attempted game. Serialization speed uses bytes written divided by measured serialization time. "
+    out.extend(["", "Generation seconds measure recorded simulation and coordinator time. Export, audit, shutdown, "
+                "and time lost before an interrupted checkpoint are excluded. Worker seconds sum the individual "
+                "simulation durations. Mean worker simulation time is per attempted game. "
+                "Serialization speed uses bytes written divided by measured serialization time. "
+                "Storage bytes cover portable data and configuration, excluding the manifest, reports and checkpoint. "
+                "Current dataset bytes measure all files present immediately before this audit writes its reports. "
                 "A dash means a measurement was unavailable. " + r["performance"].get("memory_scope",""),
+                "Game outcomes, attempts and sample counts are exact archive counts. Timing and memory describe "
+                "the measured execution environment and may vary on another machine.",
                 "", "## Observations", ""])
     out.extend("- " + line for line in r["observations"])
+    if r.get("recommendations"):
+        out.extend(["", "## Recommendations before full generation", ""])
+        out.extend("- " + line for line in r["recommendations"])
     return "\n".join(out) + "\n"
 
 
@@ -624,6 +724,40 @@ def _observations(cohorts, positions, phase_targets, diversity):
     return remarks or ["No completed sample is available for a diversity comparison."]
 
 
+def _recommendations(cohorts, positions, phase_targets, allocation):
+    primary = cohorts["primary"]
+    out = []
+    summary = primary["first_player"]
+    if summary["unfinished"]:
+        out.append(f"{summary['unfinished']:,} of {summary['attempted']:,} primary attempts reached the turn limit. "
+                   "Review completion rates by matchup before the 80,000-game run. A larger completed-game target "
+                   "continues selecting games that finish within the cutoff, so increasing volume alone cannot "
+                   "restore the omitted trajectory distribution.")
+    selfplay = primary["by_pure_selfplay_policy"]
+    if len(selfplay) > 1:
+        slow = sorted(selfplay.items(),key=lambda x:(x[1]["completion_rate"],-x[1]["attempted"]))[:2]
+        examples = " and ".join(f"{name} completed {v['completed']:,}/{v['attempted']:,}" for name,v in slow)
+        out.append(f"In pure self-play, {examples}. Review the allocation and evaluate explicit completed-game "
+                   "targets for each policy under a fixed attempt or time budget. The current rotating catalog "
+                   "permits retries to change policies within a shared category quota, so raising that quota alone does not "
+                   "ensure balanced completed policies. Record revised quotas and unmet targets in a separately "
+                   "versioned pilot before scaling.")
+    elif allocation["primary_shortfall"]:
+        out.append("Evaluate revised allocation or per-policy completion targets in a separately versioned pilot "
+                   "with a fixed attempt or time budget before scaling. Use the observed completion rates to "
+                   "report the cost and any remaining quota shortfall.")
+    phases = Counter()
+    for split in ("train","validation","test"):
+        phases.update(positions[split]["phases"])
+    total = sum(phases.values())
+    if total and phases["near_terminal"]/total < phase_targets[3] - .01:
+        out.append(f"Near-terminal positions account for {phases['near_terminal']/total:.1%} of primary samples "
+                   f"against the {phase_targets[3]:.1%} target. Review the board-feature thresholds and the distinct "
+                   "positions available in completed trajectories, then test phase-quota changes on a new pilot. "
+                   "Keep the shortage explicit when the trajectories provide too few qualifying positions.")
+    return out
+
+
 def _checksums(root, manifest):
     """Check the manifest's content hashes in fixed-size chunks."""
     entries = manifest["checksums"]
@@ -645,11 +779,28 @@ def _checksums(root, manifest):
     return len(entries)
 
 
+def _resource_budget(root, observed, plan):
+    path = root/"reports"/"resource-budget.json"
+    if not path.is_file():
+        return None
+    recorded = json.loads(path.read_text())
+    limit = recorded["maximum_total_attempts"]
+    require(type(limit) is int and limit >= observed, "archive exceeds its recorded attempt budget")
+    require((recorded["primary_completed_game_target"],recorded["heldout_completed_game_target"],
+             recorded["max_player_turns"]) == (plan.target_games,plan.heldout_games,plan.max_turns),
+            "resource budget targets differ from generation configuration")
+    require(recorded["checkpoint_attempts_before_resume"] + recorded["new_attempt_budget_on_resume"] == limit,
+            "resource budget continuation does not sum to its total")
+    return dict(recorded, source="reports/resource-budget.json", attempts_used=observed,
+                attempts_remaining=limit-observed, attempt_budget_exhausted=observed==limit)
+
+
 def audit(dataset_dir, *, verify_seeds=0, write_report=True):
     """Check exported partitions, replay retained games, and optionally regenerate other attempts.
 
-    verify_seeds=-1 regenerates every attempt without a stored trajectory; a positive
-    limit regenerates that many in deterministic slot/attempt order. Failures raise AuditError.
+    verify_seeds=-1 regenerates every attempt. A positive limit first covers categories
+    and wrapper types in stable game-ID order. Stored trajectories are also eligible.
+    Failures raise AuditError.
     """
     from synthetic_game import SamplingConfig
     from synthetic_plan import PlanConfig, make_plan, spec_for
@@ -699,7 +850,10 @@ def audit(dataset_dir, *, verify_seeds=0, write_report=True):
     allocation = {"primary_target":plan.target_games, "heldout_target":plan.heldout_games,
                   "primary_completed":games["primary"]["first_player"]["completed"],
                   "heldout_completed":games["heldout_evaluation"]["first_player"]["completed"],
-                  "by_category":dict(Counter(s.category for s in slots.values() if s.split!="heldout_evaluation"))}
+                  "by_category":dict(Counter(s.category for s in slots.values() if s.split!="heldout_evaluation")),
+                  "by_subcategory":dict(Counter(s.subcategory for s in slots.values() if s.split!="heldout_evaluation"))}
+    allocation["primary_shortfall"] = plan.target_games - allocation["primary_completed"]
+    allocation["heldout_shortfall"] = plan.heldout_games - allocation["heldout_completed"]
     require((allocation["by_category"],allocation["heldout_target"],allocation["primary_completed"],allocation["heldout_completed"])
             == (manifest["allocation_targets"],manifest["heldout_target"],manifest["primary_completed"],manifest["heldout_completed"]),
             "manifest allocation differs")
@@ -723,16 +877,21 @@ def audit(dataset_dir, *, verify_seeds=0, write_report=True):
     performance["mean_worker_simulation_seconds_per_attempt"] = _rate(performance["simulation_worker_seconds"],observed)
     performance["serialization_bytes_per_second"] = _rate(performance["serialization_bytes"],
                                                             performance["serialization_seconds"])
+    performance["current_dataset_bytes_before_report"] = sum(
+        path.stat().st_size for path in root.rglob("*") if path.is_file())
     if not has_candidate_checkpoint:
         diversity["candidate_drops_by_split"] = None
     coverage["checked_file_sha256"] = checked_files
     coverage["has_prefilter_checkpoint"] = has_candidate_checkpoint
     coverage["audit_seconds"] = perf_counter() - start
-    result = {"status":"passed", "attempted_games":observed,"completed_games":completed,
+    result = {"status":"passed", "allocation_targets_reached":not (allocation["primary_shortfall"] or allocation["heldout_shortfall"]),
+              "attempted_games":observed,"completed_games":completed,
               "unfinished_games":observed-completed,"games":games,"positions":positions,
+              "max_player_turns":plan.max_turns,"resource_budget":_resource_budget(root,observed,plan),
               "target_phase_weights":sampling.phase_weights,"diversity":diversity,"validation":coverage,
               "cross_split_drops":num_drops,"performance":performance,"allocation":allocation,
-              "observations":_observations(games,positions,sampling.phase_weights,diversity)}
+              "observations":_observations(games,positions,sampling.phase_weights,diversity),
+              "recommendations":_recommendations(games,positions,sampling.phase_weights,allocation)}
     if write_report:
         destination = root/"reports"
         destination.mkdir(parents=True,exist_ok=True)
@@ -746,7 +905,7 @@ def audit(dataset_dir, *, verify_seeds=0, write_report=True):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dataset",type=Path)
-    parser.add_argument("--verify-seeds",type=int,default=0,help="regenerate N additional unarchived games; -1 for all")
+    parser.add_argument("--verify-seeds",type=int,default=0,help="regenerate N games across categories and wrapper types; -1 for all")
     args = parser.parse_args()
     report = audit(args.dataset,verify_seeds=args.verify_seeds)
     print(f"Validated {report['attempted_games']:,} attempts and {report['diversity']['positions']:,} pre-roll positions.")

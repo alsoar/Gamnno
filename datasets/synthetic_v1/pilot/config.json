@@ -1,0 +1,70 @@
+{
+  "created_utc": "2026-11-17T03:50:14.767706+00:00",
+  "plan": {
+    "epsilons": [
+      0.05,
+      0.1,
+      0.2
+    ],
+    "heldout_games": 100,
+    "heldout_weights": [
+      0.05,
+      0.25,
+      0.05,
+      0.1,
+      0.15,
+      0.05,
+      0.2,
+      0.15,
+      0.0
+    ],
+    "master_seed": 2026,
+    "max_attempts_per_slot": 64,
+    "max_turns": 2000,
+    "mixture_weights": [
+      0.15,
+      0.15,
+      0.1,
+      0.15,
+      0.1,
+      0.1,
+      0.15,
+      0.1,
+      0.0
+    ],
+    "namespace": "pilot",
+    "target_games": 5000
+  },
+  "sampling": {
+    "min_turn_gap": 3,
+    "phase_thresholds": {
+      "early_distance": 24,
+      "early_outside": 6,
+      "late_outside": 2,
+      "near_distance": 2,
+      "near_lead": 6,
+      "near_outside": 1
+    },
+    "phase_weights": [
+      0.2,
+      0.3,
+      0.3,
+      0.2
+    ],
+    "positions_per_game": 15
+  },
+  "schema_version": 1,
+  "software": {
+    "commit": "d48ca96b705ef3c1a8b9564b9341c4674983c509",
+    "decision_sha256": "2fea0e64d041f904c97d8602f1e8980373a21f59b98dc58fff099a860be7e380",
+    "generator_sha256": "049496e7d67372848cc42a5cfff4aed41ad2cbd8ae10d55a0eb8e766bf7f5cd4",
+    "numpy": "2.0.2",
+    "pyarrow": "21.0.0",
+    "python": "3.9.6",
+    "rule_sha256": "ec57a04ec0f0e01e2491a53aea43313fe0f002db8720810e337e18f4b0365a15"
+  },
+  "trajectory": {
+    "mode": "all",
+    "probability": 0.02
+  }
+}

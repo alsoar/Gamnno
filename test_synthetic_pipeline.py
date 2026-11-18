@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from synthetic_audit import audit
+from synthetic_audit import AuditError, audit
 from synthetic_data import exclusive, generate
 from synthetic_game import SamplingConfig
 from synthetic_plan import PlanConfig
@@ -127,6 +127,55 @@ class PipelineTests(unittest.TestCase):
             _run(root, replace(self.plan, max_attempts_per_slot=1), self.sampling,
                  workers=1, attempt_budget=0)
         self.assertEqual({f: digest(f) for f in paths}, before)
+
+    def test_interrupted_shard_export_recovers_from_checkpoint_without_new_games(self):
+        root = self.root / "interrupted-export"
+        initial = _run(root, self.plan, self.sampling, workers=1, attempt_budget=3)
+        manifest_before = (root / "manifest.json").read_bytes()
+        game_shard = root / "games/part-00000.parquet"
+        checkpoint = root / "checkpoints/run.sqlite3"
+        original_replace = Path.replace
+        interrupted = []
+
+        def interrupt_after_game_shard(source, target):
+            target = Path(target)
+            staged_digest = digest(source) if target == game_shard else None
+            result = original_replace(source, target)
+            if target == game_shard:
+                # The replacement publishes one complete file before the later
+                # value/trajectory shards and final manifest can be published.
+                self.assertFalse(source.exists())
+                self.assertEqual(digest(target), staged_digest)
+                interrupted.append(digest(checkpoint))
+                raise RuntimeError("test interruption after replacing game shard")
+            return result
+
+        with patch.object(Path, "replace", interrupt_after_game_shard):
+            with self.assertRaisesRegex(RuntimeError, "after replacing game shard"):
+                _run(root, self.plan, self.sampling, workers=1, attempt_budget=1)
+        self.assertEqual(len(interrupted), 1)
+        self.assertEqual(digest(checkpoint), interrupted[0])
+        self.assertEqual((root / "manifest.json").read_bytes(), manifest_before)
+        self.assertNotEqual(digest(game_shard), initial["checksums"]["games/part-00000.parquet"])
+        self.assertEqual(_logical_evidence(root), _logical_evidence(self.reference))
+        with self.assertRaisesRegex(AuditError, "checksum differs"):
+            audit(root, write_report=False)
+        self.assertEqual(digest(checkpoint), interrupted[0])
+
+        # Equivalent to resuming the original command with --attempt-budget 0.
+        with patch("synthetic_data.ProcessPoolExecutor", side_effect=AssertionError("unexpected resimulation")):
+            final = _run(root, self.plan, self.sampling, workers=2, attempt_budget=0)
+        self.assertEqual(digest(checkpoint), interrupted[0])
+        self.assertEqual(final["attempted_games"], 4)
+        self.assertEqual(_logical_evidence(root), _logical_evidence(self.reference))
+        for relative, checksum in final["checksums"].items():
+            self.assertEqual(digest(root / relative), checksum)
+            if relative.split("/")[0] in (*SPLITS, "trajectories"):
+                self.assertEqual(checksum, self.ref_manifest["checksums"][relative])
+        report = audit(root, write_report=False)
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["validation"]["trajectory_games"], 4)
+        self.assertEqual(report["validation"]["trajectory_checked_samples"], 4)
 
     def test_another_process_cannot_write_while_lock_held(self):
         root = self.root / "write-lock"
